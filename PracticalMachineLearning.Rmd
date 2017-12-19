@@ -1,0 +1,131 @@
+---
+title: "Exercise Prediction"
+author: "Brett Wiens"
+date: "December 15, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(caret)
+require(rpart)
+require(randomForest)
+require(e1071)
+```
+
+## Introduction
+
+The purpose of this experiment is to take biometric equipment data and using a training dataset, try to develop a model/algorithm that effectively predicts which exercise the subject is likely participating.
+
+```{r Data Acquisition}
+if(!file.exists("TrainingDataSet.csv")){
+    download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",destfile = "TrainingDataSet.csv")
+}
+trainingData <- read.csv("TrainingDataSet.csv", na.strings=c("NA","#DIV/0!",""))
+
+if(!file.exists("TestingDataSet.csv")){
+ download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",destfile = "TestingDataSet.csv")
+}
+testData <- read.csv("TestingDataSet.csv", na.strings=c("NA","#DIV/0!",""))
+```
+
+### Preprocessing
+
+Once we have acquired our data, the next stage is to do some friendly Preprocessing.  We will first handle missing data, we have two options, imputing missing values with something like k-means nearest neighbour or deleting them.  For the sake of time and brevity, we will just get rid of missing values.  Since our data is abundant, this will likely not negatively impact our results.
+
+```{r Preprocessing}
+
+# The first thing we notice is that there are a bunch of NA values, so those need to be removed or imputed.  Since I haven't succeeded in getting kmmImput to work, I'll just delete them.
+
+noNACondition <- (colSums(is.na(trainingData)) == 0)
+noNAtrainingData <- trainingData[,noNACondition]
+
+# First we will remove variables with no (or nearly) no variance.
+goodTrainingData <- noNAtrainingData[,-nearZeroVar(noNAtrainingData)]
+
+# The X field is pretty useless (100% Unique)
+goodTrainingData <- goodTrainingData[,-1]
+
+# Next we will split our data into a training and testing dataset (test is not to be used for testing, but for evaluation)
+inTrain <- createDataPartition(goodTrainingData$classe, p=0.7, list = FALSE)
+mTrainData <- goodTrainingData[inTrain,]; mTestData <- goodTrainingData[-inTrain,]
+
+```
+
+
+## Primary Models
+
+I am going to evaluate random forest and decision tree (rPart).  We will construct these models using the caret package.  Before we begin, to save processing time, we will set some of the parameters (particularly, the number of folds and enabling parallel processing which will allow us to optimally use computer power.)
+
+```{r Fit Control}
+
+## using the trainControl allows easy and consistent usage of k-fold and more importantly, enables multiple core processing (allowParallel), without this, these models take roughly forever.
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE) 
+```
+
+The first model to be evaluated is Random Forest.
+
+```{r Random Forest Model}
+## Running the random forest model first, just because it is always expected to be the best.  Ran a little preprocessing to standardize the variables and applied the trControl from above
+modelForest <- train (classe ~ ., method = "rf", data = mTrainData, preProc=c('center','scale'),trControl = fitControl, na.action = na.omit)
+modelForest$resample 
+
+```
+
+We can see pretty good results with Random Forest, as expected.  For thoroughness, we will also test Decision Tree.
+
+```{r Decision Tree Model}
+
+# Runing the decision tree (rpart) with similar but not identical options (no standardizing)
+modelRpart <- train(classe ~ ., method = "rpart", data = mTrainData, trControl = fitControl, na.action = na.omit)
+modelRpart$resample
+
+```
+
+Not as good as the random forest.
+
+## Cross Validation and Testing
+
+We will proceed with some cross validation and accuracy testing.
+
+```{r Rpart Prediction on mTestData}
+
+predictRpart <- predict(modelRpart, mTestData)
+# Cross validation of folds
+confusionMatrix.train(modelRpart)
+# Yields accuracy of ~51.2%
+
+confusionMatrix(predictRpart, mTestData$classe)
+
+```
+
+It is pretty clear that the decision tree, at `r confusionMatrix(predictRpart, mTestData$classe)[[3]][1]` isn't ideal, but it's a start.
+
+```{r Random Forest Prediction on mTestData}
+
+predictRf <- predict(modelForest, mTestData)
+# Cross validation of folds
+confusionMatrix.train(modelForest)
+# Yields accuracy of ~99.88%
+
+confusionMatrix(predictRf, mTestData$classe)
+
+```
+
+Wow, the random forest finds an accuracy of `r confusionMatrix(predictRf, mTestData$classe)[[3]][1]` 
+That's exceptional, and probabilitistically speaking, it should be sufficient to predict the 20 required.  It would be interesting to merge the two models, but with such a high prediction rate on the random forest, it hardly makes sense to push this further.
+
+```{r Predict Test Dataset}
+## Ultimately, I need to evaluate the final model to determine the correct answers for the quiz (definitely using random forest):
+
+FinalModel <- predict(modelForest, testData)
+
+FinalModel 
+
+```
+
+## Conclusion
+
+The random forest model was found to be the strongest predictor, and it was very accurate.  So accurate that we were able to successfully evaluate 20/20 test cases!
